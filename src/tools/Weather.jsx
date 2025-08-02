@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
 // --- Helper Functions & Data ---
-
-// Maps WMO weather codes to icons, day/night descriptions, and Tailwind CSS classes
 const getWeatherInfo = (code, isDay = 1) => {
     const weatherMap = {
         0: { desc: "Clear sky", icon: "☀️", bg: 'bg-blue-400', text: 'text-yellow-300' },
@@ -28,17 +26,12 @@ const getWeatherInfo = (code, isDay = 1) => {
         99: { desc: "Thunderstorm with heavy hail", icon: "⛈️", bg: 'bg-slate-900', text: 'text-white' },
     };
     const info = weatherMap[code] || { desc: "Unknown", icon: "🤷", bg: 'bg-gray-400', text: 'text-black' };
-    
-    // Adjust for night time
-    if (!isDay) {
-        if (code <= 1) { // Clear or mainly clear
-            return { ...info, icon: "🌙", bg: 'bg-gray-800', text: 'text-yellow-200' };
-        }
+    if (!isDay && code <= 1) {
+        return { ...info, icon: "🌙", bg: 'bg-gray-800', text: 'text-yellow-200' };
     }
     return info;
 };
 
-// Formats the day of the week
 const formatDay = (dateString) => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     return days[new Date(dateString).getDay()];
@@ -46,64 +39,75 @@ const formatDay = (dateString) => {
 
 // --- Main App Component ---
 export default function App() {
-    // State management
     const [location, setLocation] = useState('Noida');
     const [weatherData, setWeatherData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    // Fetches weather data from Open-Meteo API
-    const fetchWeather = useCallback(async (city) => {
+    // Fetch weather from location string using Nominatim
+    const fetchWeather = useCallback(async (place) => {
         setLoading(true);
         setError(null);
         setWeatherData(null);
 
         try {
-            // 1. Geocoding: Convert city name to latitude and longitude
-            const geoResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${city}&count=1&language=en&format=json`);
-            if (!geoResponse.ok) throw new Error("Failed to fetch location data.");
+            const geoResponse = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`);
             const geoData = await geoResponse.json();
-            if (!geoData.results || geoData.results.length === 0) {
-                throw new Error(`Could not find location: ${city}. Please try another city.`);
-            }
-            const { latitude, longitude, name, country } = geoData.results[0];
+            if (!geoData.length) throw new Error(`Could not find location: ${place}. Please try another location.`);
+            const { lat: latitude, lon: longitude, display_name: name } = geoData[0];
 
-            // 2. Weather Forecast: Fetch detailed weather data
-            const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,uv_index_max&timezone=auto`);
-            if (!weatherResponse.ok) throw new Error("Failed to fetch weather data.");
-            const weather = await weatherResponse.json();
-
-            setWeatherData({ ...weather, name, country });
-
+            await fetchWeatherByCoords(latitude, longitude, name);
         } catch (err) {
             setError(err.message);
-            console.error(err);
-        } finally {
             setLoading(false);
         }
     }, []);
-    
-    // Initial data fetch for the default location
+
+    // Fetch weather by coordinates
+    const fetchWeatherByCoords = async (latitude, longitude, name = 'Current Location') => {
+        try {
+            const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,uv_index_max&timezone=auto`);
+            const weather = await weatherResponse.json();
+            setWeatherData({ ...weather, name, country: '' });
+        } catch (err) {
+            setError("Failed to fetch weather data.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Get user location using browser
+    const detectLocation = () => {
+        if (!navigator.geolocation) {
+            alert("Geolocation is not supported by your browser.");
+            return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const { latitude, longitude } = position.coords;
+                fetchWeatherByCoords(latitude, longitude, 'Your Location');
+            },
+            () => alert("Unable to retrieve your location.")
+        );
+    };
+
     useEffect(() => {
         fetchWeather(location);
     }, [fetchWeather]);
 
-    // Handler for the search form submission
     const handleSearch = (e) => {
         e.preventDefault();
-        if (location.trim()) {
-            fetchWeather(location);
-        }
+        if (location.trim()) fetchWeather(location);
     };
-    
-    // --- UI Rendering ---
+
     const { current, daily, hourly, name, country } = weatherData || {};
     const weatherInfo = current ? getWeatherInfo(current.weather_code, current.is_day) : getWeatherInfo(0);
 
     return (
         <div className={`min-h-screen font-sans transition-colors duration-500 ${weatherInfo.bg}`}>
             <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-6xl text-white">
-                
+
                 {/* Search Bar */}
                 <form onSubmit={handleSearch} className="mb-6 flex gap-2">
                     <input
@@ -116,16 +120,17 @@ export default function App() {
                     <button type="submit" className="bg-white/30 hover:bg-white/50 text-white font-bold py-3 px-6 rounded-full transition-transform active:scale-95">
                         Search
                     </button>
+                    <button type="button" onClick={detectLocation} className="bg-white/30 hover:bg-white/50 text-white font-bold py-3 px-6 rounded-full transition-transform active:scale-95">
+                        📍
+                    </button>
                 </form>
 
-                {/* Main Content Area */}
                 {loading && <div className="text-center text-2xl p-10">Loading weather data...</div>}
                 {error && <div className="text-center bg-red-500/50 p-4 rounded-lg text-xl">{error}</div>}
 
                 {weatherData && !loading && !error && (
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        
-                        {/* Current Weather Card (Left) */}
+                        {/* Current Weather */}
                         <div className="lg:col-span-1 bg-white/20 p-6 rounded-2xl shadow-lg backdrop-blur-sm">
                             <h2 className="text-2xl font-bold">{name}</h2>
                             <p className="text-lg text-gray-200">{country}</p>
@@ -133,7 +138,6 @@ export default function App() {
                             <p className="text-6xl font-bold">{Math.round(current.temperature_2m)}°C</p>
                             <p className="text-xl mt-2">{weatherInfo.desc}</p>
                             <p className="text-md text-gray-300">Feels like {Math.round(current.apparent_temperature)}°C</p>
-                            
                             <div className="mt-6 border-t border-white/20 pt-4 space-y-2 text-lg">
                                 <p>💨 Wind: {current.wind_speed_10m} km/h</p>
                                 <p>💧 Precipitation: {current.precipitation} mm</p>
@@ -141,7 +145,7 @@ export default function App() {
                             </div>
                         </div>
 
-                        {/* Forecast Details (Right) */}
+                        {/* Forecast */}
                         <div className="lg:col-span-2 space-y-6">
                             {/* Hourly Forecast */}
                             <div className="bg-white/20 p-6 rounded-2xl shadow-lg backdrop-blur-sm">
@@ -158,7 +162,7 @@ export default function App() {
                                 </div>
                             </div>
 
-                            {/* 7-Day Forecast */}
+                            {/* Daily Forecast */}
                             <div className="bg-white/20 p-6 rounded-2xl shadow-lg backdrop-blur-sm">
                                 <h3 className="text-xl font-bold mb-4">7-Day Forecast</h3>
                                 <div className="space-y-2">
